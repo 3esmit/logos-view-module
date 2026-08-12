@@ -1,0 +1,139 @@
+// logos-view-generator — the plugin glue for a Logos VIEW module.
+//
+// A view module (metadata `type: ui_qml`, `interface: universal`) is authored
+// as two user-written pieces: the `.rep` that declares the view contract (full
+// QtRO: SLOTs, PROPs, SIGNALs) and a `*Backend` class deriving the repc
+// `<RepClass>SimpleSource` plus `LogosUiPluginContext`. This tool emits the
+// third piece — the Qt plugin around them:
+//
+//   <name>_ui_interface.h   PluginInterface + the IID
+//   <name>_ui_glue.{h,cpp}  the *Plugin: Q_PLUGIN_METADATA, name()/version(),
+//                           ViewPluginBase, and the Q_INVOKABLE initLogos that
+//                           builds LogosModules, wires it into the backend
+//                           (firing onContextReady) and registers the backend
+//                           as the QtRO source.
+//
+// It deliberately does NOT read LIDL. A view's contract is its `.rep`, not a
+// `.lidl` — the class name is scraped out of the .rep and everything else comes
+// from metadata.json — so this binary needs Qt Core and nothing else. That is
+// what keeps this repo a leaf.
+//
+// Usage:
+//   logos-view-generator --metadata <metadata.json> --rep <view.rep>
+//                        [--backend-class <C>] [--backend-header <h>]
+//                        [--output-dir <dir>]
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTextStream>
+
+#include "lidl_gen_ui.h"
+
+namespace {
+
+struct Out { QString file; QString content; };
+
+int writeAll(const QList<Out>& outs, const QString& dir,
+             QTextStream& out, QTextStream& err)
+{
+    for (const Out& o : outs) {
+        const QString abs = QDir(dir).filePath(o.file);
+        QFile f(abs);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            err << "Failed to write: " << abs << "\n";
+            return 1;
+        }
+        f.write(o.content.toUtf8());
+        f.close();
+        out << "Generated: " << abs << "\n";
+    }
+    return 0;
+}
+
+QString argValue(const QStringList& args, const QString& flag)
+{
+    const int i = args.indexOf(flag);
+    if (i < 0 || i + 1 >= args.size()) return QString();
+    return args.at(i + 1);
+}
+
+// PascalCase of a module name, for the plugin class stem. Same rule the other
+// Logos generators use; inlined here rather than shared so this binary keeps
+// no dependency on a generator frontend it otherwise has no use for.
+QString toPascalCase(const QString& name)
+{
+    QString out;
+    bool cap = true;
+    for (QChar c : name) {
+        if (!c.isLetterOrNumber()) { cap = true; continue; }
+        if (cap) { out.append(c.toUpper()); cap = false; }
+        else { out.append(c.toLower()); }
+    }
+    if (out.isEmpty()) return QString("Module");
+    return out;
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    QTextStream out(stdout);
+    QTextStream err(stderr);
+
+    const QStringList args = QCoreApplication::arguments();
+    const QString metadata = argValue(args, "--metadata");
+    const QString repPath  = argValue(args, "--rep");
+    QString outputDir      = argValue(args, "--output-dir");
+
+    if (metadata.isEmpty() || repPath.isEmpty()) {
+        err << "Usage: logos-view-generator --metadata <metadata.json> --rep <view.rep>\n"
+            << "         [--backend-class <C>] [--backend-header <h>] [--output-dir <dir>]\n";
+        return 2;
+    }
+
+    QFile mf(metadata);
+    if (!mf.open(QIODevice::ReadOnly)) {
+        err << "Failed to read metadata: " << metadata << "\n";
+        return 3;
+    }
+    const QJsonObject meta = QJsonDocument::fromJson(mf.readAll()).object();
+
+    UiGlueSpec spec;
+    spec.moduleName = meta.value(QStringLiteral("name")).toString();
+    spec.moduleVersion = meta.value(QStringLiteral("version")).toString(QStringLiteral("1.0.0"));
+    if (spec.moduleName.isEmpty()) {
+        err << "metadata.json has no name\n";
+        return 3;
+    }
+    spec.pluginBase = toPascalCase(spec.moduleName);
+
+    QString repErr;
+    if (!lidlUiParseRepClass(repPath, &spec.repClass, &repErr)) {
+        err << "Error: " << repErr << "\n";
+        return 4;
+    }
+
+    spec.backendClass = argValue(args, "--backend-class");
+    if (spec.backendClass.isEmpty())
+        spec.backendClass = spec.pluginBase + QStringLiteral("Backend");
+    spec.backendHeader = argValue(args, "--backend-header");
+    if (spec.backendHeader.isEmpty())
+        spec.backendHeader = spec.moduleName + QStringLiteral("_backend.h");
+
+    if (outputDir.isEmpty())
+        outputDir = QDir::current().filePath("generated");
+    QDir().mkpath(outputDir);
+
+    QList<Out> outs;
+    outs.append({spec.moduleName + "_ui_interface.h", lidlMakeUiInterfaceHeader(spec)});
+    outs.append({spec.moduleName + "_ui_glue.h",      lidlMakeUiGlueHeader(spec)});
+    outs.append({spec.moduleName + "_ui_glue.cpp",    lidlMakeUiGlueSource(spec)});
+
+    const int rc = writeAll(outs, outputDir, out, err);
+    out.flush();
+    return rc;
+}
