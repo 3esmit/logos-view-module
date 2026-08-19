@@ -40,6 +40,22 @@
         cp ${./cmake}/LogosViewReplicaFactory.cpp.in $out/share/cmake/LogosViewModule/
       '';
 
+      # The same four templates FLAT, as a nameable output. Two consumers want
+      # them addressed as a bare directory rather than as part of an install
+      # tree: LOGOS_VIEW_TEMPLATE_DIR, which logos-module-builder passes into
+      # every ui_qml module build, and that repo's `view-interface-abi` check,
+      # which reads ${dir}/LogosView*.h.in directly. Same bytes as
+      # cmake-module's share/cmake/LogosViewModule/, one source.
+      #
+      # Deliberately NOT in the logos-view-module symlinkJoin: that join's
+      # consumers expect share/ + include/ + bin/, and a second copy of the
+      # .in files at its top level would be a second addressing scheme for
+      # bytes that already have two.
+      mkViewTemplates = pkgs: pkgs.runCommand "logos-view-templates" { } ''
+        mkdir -p $out
+        cp ${./cmake}/LogosView*.in $out/
+      '';
+
       # The header a view's *Backend derives, alongside its repc SimpleSource.
       mkInclude = pkgs: pkgs.runCommand "logos-view-module-include" {} ''
         mkdir -p $out/include
@@ -50,6 +66,9 @@
       packages = forAllSystems ({ pkgs, ... }: rec {
         logos-view-generator = mkGenerator pkgs;
         cmake-module = mkCmakeModule pkgs;
+        # Name is load-bearing: logos-module-builder looks this attribute up
+        # by name (flake.nix, the view-interface-abi check).
+        logos-view-templates = mkViewTemplates pkgs;
         include = mkInclude pkgs;
         logos-view-module = pkgs.symlinkJoin {
           name = "logos-view-module";
@@ -59,6 +78,16 @@
       });
 
       checks = forAllSystems ({ pkgs, system, ... }: {
+        # Build a replica factory plugin from a .rep file, load it, and cast
+        # it the way ui-host does. The binary-side half of the view ABI: the
+        # `view-interface-abi` check in logos-module-builder compares the
+        # module and host DECLARATIONS as text, and cannot see whether the
+        # thing that comes out of a compiler still exports the IID or still
+        # answers a qobject_cast.
+        rep-file-plugin = import ./tests/test-rep-file-plugin.nix {
+          inherit pkgs;
+        };
+
         # Drive the generator over a real .rep + metadata.json and assert it
         # emits the three files with the class names scraped from them. Cheap,
         # and it is the only thing that catches a .rep parse regression.

@@ -27,3 +27,10 @@ jobs:
 
       - name: Malformed .rep is rejected
         run: nix build '.#checks.x86_64-linux.view-generator-rejects-bad-rep'
+
+      # The templates in cmake/ are the module side of a plugin ABI whose host
+      # side lives in logos-view-module-runtime. This builds a factory from
+      # them, asserts the exact IID in the binary, then QPluginLoaders it and
+      # performs the same qobject_cast ui-host does.
+      - name: .rep replica factory builds, loads and casts
+        run: nix build '.#checks.x86_64-linux.rep-file-plugin'

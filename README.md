@@ -20,7 +20,7 @@ nothing else. Neither half needs to read a LIDL contract.
 |---|---|
 | `view-generator/` | `logos-view-generator` — emits the Qt plugin around a view's user-written `.rep` + `*Backend`: `<name>_ui_interface.h` and `<name>_ui_glue.{h,cpp}`. Qt Core only. |
 | `cmake/LogosViewModule.cmake` | `logos_replica_factory()` — builds the typed QtRO replica factory a QML view loads, plus the per-module `LogosViewPlugin` base that lets `ui-host` drive the plugin through a plain `qobject_cast` instead of `QMetaObject` reflection. |
-| `cmake/LogosView*.in` | The four templates that function configures. **Siblings of the `.cmake` by requirement** — it resolves them through `CMAKE_CURRENT_FUNCTION_LIST_DIR`. |
+| `cmake/LogosView*.in` | The four templates that function configures — and the only copy of them anywhere. **Siblings of the `.cmake` by requirement** — it resolves them through `CMAKE_CURRENT_FUNCTION_LIST_DIR`. Also published flat as `packages.<sys>.logos-view-templates`, which is the shape `LOGOS_VIEW_TEMPLATE_DIR` wants; `logos-module-builder` reads that output for every `ui_qml` module and for its `view-interface-abi` check. See `cmake/README.md`. |
 | `cpp/logos_ui_plugin_context.h` | `LogosUiPluginContext` — the narrow context a view's `*Backend` derives alongside its repc `SimpleSource`. It supplies `onContextReady()` and the typed `modules()` accessors to declared dependencies, and nothing else: a view is a view, not a module, so it gets no `modulePath`, no `instanceId`, no persistence, and no events of its own. |
 
 ## The authoring split
@@ -74,9 +74,31 @@ logos_replica_factory(NAME chat_ui REP_FILE src/ChatBackend.rep)
 ```bash
 nix build .#checks.<system>.view-generator
 nix build .#checks.<system>.view-generator-rejects-bad-rep
+nix build .#checks.<system>.rep-file-plugin
 ```
 
 The first drives the generator over a real `.rep` + `metadata.json` and asserts
 the scraped rep class, the PascalCase plugin stem and the carried version. The
 second asserts a `.rep` declaring no class **fails** rather than emitting half a
 plugin — the failure mode that is otherwise silent.
+
+The third (`tests/rep-file-plugin`) is the binary side of the plugin ABI in
+`cmake/LogosView*.in`. It runs `repc` over a real `.rep`, instantiates the
+factory templates through `configure_file` and compiles the result, then
+asserts:
+
+* the built plugin carries **exactly** `logos.view.replica_factory/1.0` and no
+  other replica-factory IID — an exact-set match, because the substring match
+  it replaced passed happily when `Q_PLUGIN_METADATA` was bumped to `/2.0`;
+* `QPluginLoader::instance()` returns non-null and
+  `qobject_cast<LogosViewReplicaFactory*>` succeeds — the `Q_INTERFACES`
+  binding, which leaves every string in the binary untouched when deleted and
+  only shows up as a blank view;
+* `replicaMetaObject()` is wired to the `repc`-generated replica.
+
+It is handed `cmake/` itself as `LOGOS_VIEW_TEMPLATE_DIR`, so it compiles the
+same files a real `ui_qml` module does rather than a private duplicate, and it
+does the load exactly as `logos-view-module-runtime`'s
+`LogosQmlBridge::loadFactory` does. That complements `logos-module-builder`'s
+`view-interface-abi` check, which compares the module and host *declarations*
+as text and never builds either.
