@@ -19,9 +19,17 @@
 // what keeps this repo a leaf.
 //
 // Usage:
-//   logos-view-generator --metadata <metadata.json> --rep <view.rep>
+//   logos-view-generator [--backend ui] --metadata <metadata.json> --rep <view.rep>
 //                        [--backend-class <C>] [--backend-header <h>]
 //                        [--output-dir <dir>]
+//
+// `--backend ui` is the only backend this binary has, and it is the default, so
+// it may be omitted. It is ACCEPTED rather than ignored because the caller that
+// matters -- logos-module-builder's ui_qml codegen step -- spells it explicitly,
+// having previously invoked `logos-qt-generator --backend ui`. An unrecognised
+// value is REFUSED: silently treating `--backend qml-dep` as ui would emit the
+// wrong artifact set under a green build, which is the failure mode that put
+// this generator in two repos in the first place.
 
 #include <QCoreApplication>
 #include <QDir>
@@ -85,12 +93,21 @@ int main(int argc, char* argv[])
     QTextStream err(stderr);
 
     const QStringList args = QCoreApplication::arguments();
+
+    // Backend selection. Defaults to the only backend there is; anything else
+    // is an error rather than a silent fallback. See the usage note above.
+    const QString backend = argValue(args, "--backend");
+    if (!backend.isEmpty() && backend != QStringLiteral("ui")) {
+        err << "Unknown --backend: " << backend << " (expected ui)\n";
+        return 2;
+    }
+
     const QString metadata = argValue(args, "--metadata");
     const QString repPath  = argValue(args, "--rep");
     QString outputDir      = argValue(args, "--output-dir");
 
     if (metadata.isEmpty() || repPath.isEmpty()) {
-        err << "Usage: logos-view-generator --metadata <metadata.json> --rep <view.rep>\n"
+        err << "Usage: logos-view-generator [--backend ui] --metadata <metadata.json> --rep <view.rep>\n"
             << "         [--backend-class <C>] [--backend-header <h>] [--output-dir <dir>]\n";
         return 2;
     }

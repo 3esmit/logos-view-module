@@ -119,8 +119,41 @@
           # version() is emitted inline in the glue HEADER, not the .cpp.
           grep -q 'version() const override.*"2.1.0"' out/ticker_panel_ui_glue.h \
             || { echo "version not carried from metadata.json"; exit 1; }
+
+          # ── The teardown surface, as TEXT ────────────────────────────────
+          # Carried from logos-qt-sdk's qtgen.ui_plugin_surface, which was the
+          # only thing pinning these three properties before the emitter moved
+          # here. Kept as the FAST signal; `ui-plugin-metaobject` is the one
+          # that actually proves the host can reach them, because text in a
+          # .cpp is not evidence that moc registered anything.
+          #
+          #   * the hook is INVOKABLE and returns int -- the host reads it back
+          #     with Q_RETURN_ARG(int) and must not need the SDK enum;
+          #   * the completion signal exists -- a view that answers
+          #     Asynchronous with no way to say it is done gets refused the
+          #     wait outright;
+          #   * the emission is QUEUED -- the backend may finish on any thread,
+          #     and the host is waiting on the plugin's.
+          grep -q 'Q_INVOKABLE int aboutToUnload();' out/ticker_panel_ui_glue.h \
+            || { echo "generated plugin does not declare Q_INVOKABLE int aboutToUnload()"; exit 1; }
+          grep -q 'Q_SIGNALS:' out/ticker_panel_ui_glue.h \
+            || { echo "generated plugin declares no Q_SIGNALS section"; exit 1; }
+          grep -q 'void unloadFinished();' out/ticker_panel_ui_glue.h \
+            || { echo "generated plugin does not declare the unloadFinished() signal"; exit 1; }
+          grep -q 'maybeUiPluginAboutToUnload' out/ticker_panel_ui_glue.cpp \
+            || { echo "aboutToUnload() does not delegate to the SFINAE helper"; exit 1; }
+          grep -q 'Qt::QueuedConnection' out/ticker_panel_ui_glue.cpp \
+            || { echo "unloadFinished() is not emitted through a QUEUED connection"; exit 1; }
           touch $out
         '';
+
+        # The same surface, proven BEHAVIOURALLY: compile the emitted plugin,
+        # load it with QPluginLoader, and drive the teardown handshake through
+        # the meta-object the way ui-host does. See tests/ui-plugin-metaobject.
+        ui-plugin-metaobject = import ./tests/test-ui-plugin-metaobject.nix {
+          inherit pkgs;
+          viewGenerator = self.packages.${system}.logos-view-generator;
+        };
 
         # A missing/!unparseable .rep must FAIL, not emit half a plugin.
         view-generator-rejects-bad-rep = pkgs.runCommand "logos-view-generator-reject-test" {

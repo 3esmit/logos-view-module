@@ -18,10 +18,32 @@ nothing else. Neither half needs to read a LIDL contract.
 
 | Piece | What it does |
 |---|---|
-| `view-generator/` | `logos-view-generator` — emits the Qt plugin around a view's user-written `.rep` + `*Backend`: `<name>_ui_interface.h` and `<name>_ui_glue.{h,cpp}`. Qt Core only. |
+| `view-generator/` | `logos-view-generator` — emits the Qt plugin around a view's user-written `.rep` + `*Backend`: `<name>_ui_interface.h` and `<name>_ui_glue.{h,cpp}`. Qt Core only. This is the emitter `logos-module-builder` runs for every `type: ui_qml` module (`--backend ui`); it used to live in logos-qt-sdk as well, and that copy is gone. |
 | `cmake/LogosViewModule.cmake` | `logos_replica_factory()` — builds the typed QtRO replica factory a QML view loads, plus the per-module `LogosViewPlugin` base that lets `ui-host` drive the plugin through a plain `qobject_cast` instead of `QMetaObject` reflection. |
 | `cmake/LogosView*.in` | The four templates that function configures — and the only copy of them anywhere. **Siblings of the `.cmake` by requirement** — it resolves them through `CMAKE_CURRENT_FUNCTION_LIST_DIR`. Also published flat as `packages.<sys>.logos-view-templates`, which is the shape `LOGOS_VIEW_TEMPLATE_DIR` wants; `logos-module-builder` reads that output for every `ui_qml` module and for its `view-interface-abi` check. See `cmake/README.md`. |
-| `cpp/logos_ui_plugin_context.h` | `LogosUiPluginContext` — the narrow context a view's `*Backend` derives alongside its repc `SimpleSource`. It supplies `onContextReady()` and the typed `modules()` accessors to declared dependencies, and nothing else: a view is a view, not a module, so it gets no `modulePath`, no `instanceId`, no persistence, and no events of its own. |
+| `cpp/logos_ui_plugin_context.h` | `LogosUiPluginContext` — the narrow context a view's `*Backend` derives alongside its repc `SimpleSource`. It supplies `onContextReady()` and the typed `modules()` accessors to declared dependencies, and nothing else: a view is a view, not a module, so it gets no `modulePath`, no `instanceId`, no persistence, and no events of its own. It also carries the teardown hook (`aboutToUnload()` / `unloadFinished()`). Published as `packages.<sys>.include`; `logos-module-builder` puts it on the include path ahead of logos-qt-sdk's older copy. |
+
+## One pin, one pair
+
+`view-generator/lidl_gen_ui.cpp` and `cpp/logos_ui_plugin_context.h` are a
+**matched pair**, and they live in one repo for that reason. The emitted glue
+calls `_logos_codegen_::maybeUiPluginAboutToUnload(...)`; only that header
+declares it. Ship them from two independently-pinned repos and every `ui_qml`
+build silently depends on those two pins agreeing.
+
+That is not hypothetical. Both files previously lived in logos-qt-sdk *and* a
+copy of each lived here. logos-qt-sdk#38 added the module teardown hook to its
+pair; the pair here never got it, and nothing failed — because a generated view
+plugin missing the hook still builds, still loads and still runs. `ui-host`
+reaches `aboutToUnload()` **by name** through the meta-object, so a plugin class
+that does not declare it simply has no such meta-method:
+`QMetaObject::invokeMethod` returns `false` and the host moves on, exactly as it
+would for a view that answered "Synchronous, nothing to wait for". Every view
+would have lost its chance to finish, permanently and quietly.
+
+The `ui-plugin-metaobject` check exists to make that loud: it runs the
+generator, compiles the plugin it emitted, loads it with `QPluginLoader` and
+drives the teardown handshake through the meta-object the way the host does.
 
 ## The authoring split
 
