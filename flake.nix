@@ -144,6 +144,19 @@
             || { echo "aboutToUnload() does not delegate to the SFINAE helper"; exit 1; }
           grep -q 'Qt::QueuedConnection' out/ticker_panel_ui_glue.cpp \
             || { echo "unloadFinished() is not emitted through a QUEUED connection"; exit 1; }
+
+          # Class declarations can follow migration comments or a UTF-8 BOM.
+          # The parser must agree with repc rather than selecting prose.
+          printf '%s\n' '// Previous API: class LegacyName' \
+            '/* migration note: class BlockCommentName */' \
+            'class CommentedTicker' '{' '}' > Commented.rep
+          logos-view-generator --metadata metadata.json --rep Commented.rep --output-dir commented
+          grep -q 'CommentedTickerViewPluginBase' commented/ticker_panel_ui_glue.h \
+            || { echo "line/block comments changed the replica class"; exit 1; }
+          printf '\357\273\277class BomTicker' '{' '}' > Bom.rep
+          logos-view-generator --metadata metadata.json --rep Bom.rep --output-dir bom
+          grep -q 'BomTickerViewPluginBase' bom/ticker_panel_ui_glue.h \
+            || { echo "UTF-8 BOM changed the replica class"; exit 1; }
           touch $out
         '';
 

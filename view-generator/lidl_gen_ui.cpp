@@ -34,16 +34,22 @@ bool lidlUiParseRepClass(const QString& repPath, QString* repClass, QString* why
         if (whyNot) *whyNot = "cannot read .rep file: " + repPath;
         return false;
     }
-    const QString text = QString::fromUtf8(f.readAll());
-    // Same extraction logos_module(REP_FILE ...) performs: the first class
-    // declaration names the QtRO types (SimpleSource/Replica/ViewPluginBase).
+    QString text = QString::fromUtf8(f.readAll());
+    // Keep this parser in lockstep with logos_module(REP_FILE ...): a .rep can
+    // begin with a UTF-8 BOM and migration notes often mention old class names
+    // in line/block comments. Matching those notes generates glue for a class
+    // that repc never emits, producing a compile failure far from the cause.
+    if (!text.isEmpty() && text.front() == QChar(0xFEFF))
+        text.remove(0, 1);
+    text.replace(QRegularExpression(QStringLiteral("//[^\\r\\n]*")), QStringLiteral(" "));
+    text.replace(QRegularExpression(QStringLiteral("(?s)/\\*.*?\\*/")), QStringLiteral(" "));
     QRegularExpressionMatch m =
-        QRegularExpression(QStringLiteral("class[ \\t]+([A-Za-z_][A-Za-z0-9_]*)")).match(text);
+        QRegularExpression(QStringLiteral("(^|[\\r\\n])[ \\t]*class[ \\t]+([A-Za-z_][A-Za-z0-9_]*)")).match(text);
     if (!m.hasMatch()) {
         if (whyNot) *whyNot = "no `class <Name>` declaration found in " + repPath;
         return false;
     }
-    if (repClass) *repClass = m.captured(1);
+    if (repClass) *repClass = m.captured(2);
     return true;
 }
 
